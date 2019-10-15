@@ -44,7 +44,7 @@ if ($opt{'help'}) {
   print "      --embedded        URL refers to a page with <video> tag (default)\n";
   print "      --playlist        URL refers to an M3U (m3u8) playlist\n";
   print "      --svtplay         URL refers to an SVT Play page (svtplay.se)\n";
-  print "  -o, --output=FILE     save video to FILE rather than \"video.ts\"\n";
+  print "  -o, --output=FILE     save video to FILE rather than \"stream.csv\"\n";
   print "  -f, --force           force overwriting existing output file\n";
   print "  -b, --bandwidth=SPEC  pick video with specified bandwidth (bits/s),\n";
   print "                        lowest (\"min\") or highest (\"max\") (default max)\n";
@@ -64,8 +64,8 @@ die "--verbose and --quiet are mutually exclusive\n" if $opt{'verbose'} && $opt{
 die "non-numeric --bandwidth specified\n" if $opt{'bandwidth'} !~ /^(min|max|\d+)$/;
 die "missing URL operand\n" if !@ARGV;
 if (!exists $opt{'output'}) {
-  $opt{'output'} = 'video.ts';
-  warn "no output file specified, assuming video.ts\n" if !$opt{'quiet'};
+  $opt{'output'} = 'stream.csv';
+  warn "no output file specified, assuming stream.csv\n" if !$opt{'quiet'};
 }
 
 my ($url) = @ARGV;
@@ -125,116 +125,120 @@ elsif ($opt{'embedded'}) {
   print "URL (master): $url\n" if $opt{'verbose'};
 }
 
-my $data = eval { fetch_url($url) }; die "$url: cannot fetch playlist: $@" if $@;
-my @lines = split(/\r*\n|\r\n*/, $data);
-die "$url: invalid playlist, no header\n" if @lines < 1 || $lines[0] ne '#EXTM3U';
+while() {
+	my $data = eval { fetch_url($url) }; die "$url: cannot fetch playlist: $@" if $@;
+	my @lines = split(/\r*\n|\r\n*/, $data);
+	die "$url: invalid playlist, no header\n" if @lines < 1 || $lines[0] ne '#EXTM3U';
 
-if (!grep { /^#EXTINF:/ } @lines) {
-  my (@streams, $last_stream);
-  foreach my $line (@lines) {
-    if ($line =~ /^#EXT-X-STREAM-INF:(.*)$/) {
-      $last_stream = { parse_m3u_attribs($url, $1) };
-      push @streams, $last_stream;
-    } elsif ($line !~ /^#EXT/) {
-      die "$url: missing #EXT-X-STREAM-INF for URL: $line\n" if !defined $last_stream;
-      $last_stream->{'URL'} = $line;
-      $last_stream = undef;
-    }
-  }
-  die "$url: no streams found in playlist\n" if !@streams;
+	if (!grep { /^#EXTINF:/ } @lines) {
+	  my (@streams, $last_stream);
+	  foreach my $line (@lines) {
+		if ($line =~ /^#EXT-X-STREAM-INF:(.*)$/) {
+		  $last_stream = { parse_m3u_attribs($url, $1) };
+		  push @streams, $last_stream;
+		} elsif ($line !~ /^#EXT/) {
+	#      die "$url: missing #EXT-X-STREAM-INF for URL: $line\n" if !defined $last_stream;
+		  $last_stream->{'URL'} = $line;
+		  $last_stream = undef;
+		}
+	  }
+	  die "$url: no streams found in playlist\n" if !@streams;
 
-  warn "$url: non-numeric bandwidth in playlist\n" if grep { $_->{'BANDWIDTH'} =~ /\D/ } @streams;
-  my @bandwidths = sort { $a <=> $b } grep { /^\d+$/ } map { $_->{'BANDWIDTH'} } @streams;
-  print "Bandwidths: ", join(', ', @bandwidths), "\n" if $opt{'verbose'};
-  my $stream;
-  if ($opt{'bandwidth'} eq 'min') {
-    ($stream) = grep { $_->{'BANDWIDTH'} == $bandwidths[0] } @streams;
-  } elsif ($opt{'bandwidth'} eq 'max') {
-    ($stream) = grep { $_->{'BANDWIDTH'} == $bandwidths[-1] } @streams;
-  } else {
-    ($stream) = grep { $opt{'bandwidth'} == $_->{'BANDWIDTH'} } @streams;
-    die "$url: no streams with bandwidth $opt{'bandwidth'} in playlist\n" if !defined $stream;
-  }
-  print "Bandwidth (selected): $stream->{'BANDWIDTH'}\n" if $opt{'verbose'};
-  $url = url($stream->{'URL'}, $url)->abs()->as_string();
-  print "URL (index): $url\n" if $opt{'verbose'};
+	  warn "$url: non-numeric bandwidth in playlist\n" if grep { $_->{'BANDWIDTH'} =~ /\D/ } @streams;
+	  my @bandwidths = sort { $a <=> $b } grep { /^\d+$/ } map { $_->{'BANDWIDTH'} } @streams;
+	  print "Bandwidths: ", join(', ', @bandwidths), "\n" if $opt{'verbose'};
+	  my $stream;
+	  if ($opt{'bandwidth'} eq 'min') {
+		($stream) = grep { $_->{'BANDWIDTH'} == $bandwidths[0] } @streams;
+	  } elsif ($opt{'bandwidth'} eq 'max') {
+		($stream) = grep { $_->{'BANDWIDTH'} == $bandwidths[-1] } @streams;
+	  } else {
+		($stream) = grep { $opt{'bandwidth'} == $_->{'BANDWIDTH'} } @streams;
+		die "$url: no streams with bandwidth $opt{'bandwidth'} in playlist\n" if !defined $stream;
+	  }
+	  print "Bandwidth (selected): $stream->{'BANDWIDTH'}\n" if $opt{'verbose'};
+	  $url = url($stream->{'URL'}, $url)->abs()->as_string();
+	  print "URL (index): $url\n" if $opt{'verbose'};
 
-  $data = eval { fetch_url($url) }; die "$url: cannot fetch playlist: $@" if $@;
-  @lines = split(/\r?\n/, $data);
-  die "$url: invalid playlist, no header\n" if @lines < 1 || $lines[0] ne '#EXTM3U';
+	  $data = eval { fetch_url($url) }; die "$url: cannot fetch playlist: $@" if $@;
+	  @lines = split(/\r?\n/, $data);
+	  die "$url: invalid playlist, no header\n" if @lines < 1 || $lines[0] ne '#EXTM3U';
+	}
+
+	my $sequence = 0;
+	my (%segments, $cryptkey_url);
+	foreach my $line (@lines) {
+	  if ($line =~ /^#EXT-X-MEDIA-SEQUENCE:(\d+)$/) {
+		$sequence = $1;
+		print "First sequence number: $sequence\n" if $opt{'verbose'};
+	  } elsif ($line =~ /^#EXT-X-KEY:(.*)$/) {
+		my %attr = parse_m3u_attribs($url, $1);
+		die "$url: unsupported encryption method $attr{'METHOD'} in playlist\n" if exists $attr{'METHOD'} && $attr{'METHOD'} ne 'AES-128';
+		$cryptkey_url = $attr{'URI'};
+		die "$url: missing encryption key URI in playlist\n" if !defined $cryptkey_url;
+	  } elsif ($line !~ /^#EXT/) {
+		$segments{$sequence} = { 'url' => $line, 'cryptkey_url' => $cryptkey_url };
+		$sequence++;
+	  }
+	}
+	die "$url: no segments in playlist\n" if !scalar keys %segments;
+
+	my %cryptkeys;
+	#my $cryptkey;
+	#if (defined $cryptkey_url) {
+	#  print "URL (key): $cryptkey_url\n" if $opt{'verbose'};
+	#  $cryptkey = eval { fetch_url($cryptkey_url) }; die "$cryptkey_url: cannot fetch encryption key: $@" if $@;
+	#  $cryptkey = join('', map { sprintf('%02x', ord) } split(//, $cryptkey));
+	#  print "Key: $cryptkey\n" if $opt{'verbose'};
+	#}
+	print "Segments: ", scalar keys %segments, "\n" if $opt{'verbose'};
+
+	$| = 1;
+	foreach my $sequence (sort { $a <=> $b } keys %segments) {
+	  my $segment = $segments{$sequence};
+	  my $segment_url = url($segment->{'url'}, $url)->abs()->as_string();
+	  print "URL (segment $sequence): $segment_url\n" if $opt{'verbose'};
+	  printf "\r%d/%d", $sequence, scalar keys %segments if !$opt{'quiet'} && !$opt{'verbose'};
+
+	  if (!$opt{'no-decrypt'} && defined $segment->{'cryptkey_url'} && !exists $cryptkeys{$segment->{'cryptkey_url'}}) {
+		print "URL (key): ", $segment->{'cryptkey_url'}, "\n" if $opt{'verbose'};
+		my $cryptkey = eval { fetch_url($segment->{'cryptkey_url'}) };
+		die "$segment->{'cryptkey_url'}: cannot fetch encryption key: $@" if $@;
+		$cryptkey = join('', map { sprintf('%02x', ord) } split(//, $cryptkey));
+		print "Key: $cryptkey\n" if $opt{'verbose'};
+		$cryptkeys{$segment->{'cryptkey_url'}} = $cryptkey;
+	  }
+
+	  my ($segment_fh, $segment_file) = tempfile();
+	  close $segment_fh;
+	  eval {
+		eval { fetch_url($segment_url, $segment_file) }; die "$segment_url: cannot not fetch segment: $@" if $@;
+		if (!$opt{'no-decrypt'} && defined $segment->{'cryptkey_url'}) {
+		  my ($decrypt_fh, $decrypt_file) = tempfile();
+		  close $decrypt_fh;
+		  my $iv = sprintf('%032x', $sequence);
+		  my @cmd = ('openssl', 'aes-128-cbc', '-d', '-in', $segment_file, '-out', $decrypt_file, '-K', $cryptkeys{$segment->{'cryptkey_url'}}, '-iv', $iv);
+		  system @cmd;
+		  unlink $segment_file || warn "$segment_file: cannot remove file: $!\n";
+		  $segment_file = $decrypt_file;
+		  die "$segment_file: openssl failed (status $?)\n" if $? != 0;
+		}
+#		open ($segment_fh, '<', $segment_file) || die "$segment_file: cannot open file: $!\n";
+#		for (;;) {
+#		  my $size = sysread($segment_fh, $data, READ_SIZE);
+#		  die "$segment_file: cannot read from file: $!\n" if !defined $size;
+#		  last if $size == 0;
+#		  die "$video_file: cannot write to file: $!\n" if !defined syswrite($video_fh, $data);
+#		}
+#		close $segment_fh;
+	  };
+	  unlink $segment_file || warn "$segment_file: cannot remove file: $!\n";
+	  die $@ if $@;
+	}
+	close $video_fh;
+
+	sleep(4);
 }
-
-my $sequence = 0;
-my (%segments, $cryptkey_url);
-foreach my $line (@lines) {
-  if ($line =~ /^#EXT-X-MEDIA-SEQUENCE:(\d+)$/) {
-    $sequence = $1;
-    print "First sequence number: $sequence\n" if $opt{'verbose'};
-  } elsif ($line =~ /^#EXT-X-KEY:(.*)$/) {
-    my %attr = parse_m3u_attribs($url, $1);
-    die "$url: unsupported encryption method $attr{'METHOD'} in playlist\n" if exists $attr{'METHOD'} && $attr{'METHOD'} ne 'AES-128';
-    $cryptkey_url = $attr{'URI'};
-    die "$url: missing encryption key URI in playlist\n" if !defined $cryptkey_url;
-  } elsif ($line !~ /^#EXT/) {
-    $segments{$sequence} = { 'url' => $line, 'cryptkey_url' => $cryptkey_url };
-    $sequence++;
-  }
-}
-die "$url: no segments in playlist\n" if !scalar keys %segments;
-
-my %cryptkeys;
-#my $cryptkey;
-#if (defined $cryptkey_url) {
-#  print "URL (key): $cryptkey_url\n" if $opt{'verbose'};
-#  $cryptkey = eval { fetch_url($cryptkey_url) }; die "$cryptkey_url: cannot fetch encryption key: $@" if $@;
-#  $cryptkey = join('', map { sprintf('%02x', ord) } split(//, $cryptkey));
-#  print "Key: $cryptkey\n" if $opt{'verbose'};
-#}
-print "Segments: ", scalar keys %segments, "\n" if $opt{'verbose'};
-
-$| = 1;
-foreach my $sequence (sort { $a <=> $b } keys %segments) {
-  my $segment = $segments{$sequence};
-  my $segment_url = url($segment->{'url'}, $url)->abs()->as_string();
-  print "URL (segment $sequence): $segment_url\n" if $opt{'verbose'};
-  printf "\r%d/%d", $sequence, scalar keys %segments if !$opt{'quiet'} && !$opt{'verbose'};
-
-  if (!$opt{'no-decrypt'} && defined $segment->{'cryptkey_url'} && !exists $cryptkeys{$segment->{'cryptkey_url'}}) {
-    print "URL (key): ", $segment->{'cryptkey_url'}, "\n" if $opt{'verbose'};
-    my $cryptkey = eval { fetch_url($segment->{'cryptkey_url'}) };
-    die "$segment->{'cryptkey_url'}: cannot fetch encryption key: $@" if $@;
-    $cryptkey = join('', map { sprintf('%02x', ord) } split(//, $cryptkey));
-    print "Key: $cryptkey\n" if $opt{'verbose'};
-    $cryptkeys{$segment->{'cryptkey_url'}} = $cryptkey;
-  }
-
-  my ($segment_fh, $segment_file) = tempfile();
-  close $segment_fh;
-  eval {
-    eval { fetch_url($segment_url, $segment_file) }; die "$segment_url: cannot not fetch segment: $@" if $@;
-    if (!$opt{'no-decrypt'} && defined $segment->{'cryptkey_url'}) {
-      my ($decrypt_fh, $decrypt_file) = tempfile();
-      close $decrypt_fh;
-      my $iv = sprintf('%032x', $sequence);
-      my @cmd = ('openssl', 'aes-128-cbc', '-d', '-in', $segment_file, '-out', $decrypt_file, '-K', $cryptkeys{$segment->{'cryptkey_url'}}, '-iv', $iv);
-      system @cmd;
-      unlink $segment_file || warn "$segment_file: cannot remove file: $!\n";
-      $segment_file = $decrypt_file;
-      die "$segment_file: openssl failed (status $?)\n" if $? != 0;
-    }
-    open ($segment_fh, '<', $segment_file) || die "$segment_file: cannot open file: $!\n";
-    for (;;) {
-      my $size = sysread($segment_fh, $data, READ_SIZE);
-      die "$segment_file: cannot read from file: $!\n" if !defined $size;
-      last if $size == 0;
-      die "$video_file: cannot write to file: $!\n" if !defined syswrite($video_fh, $data);
-    }
-    close $segment_fh;
-  };
-  unlink $segment_file || warn "$segment_file: cannot remove file: $!\n";
-  die $@ if $@;
-}
-close $video_fh;
 
 sub parse_m3u_attribs {
   my ($url, $attr_str) = @_;
