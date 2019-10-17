@@ -74,7 +74,9 @@ $browser->cookie_jar({});
 
 my $video_file = $opt{'output'};
 die "$video_file: file exists, not overwriting without -f/--force\n" if !$opt{'force'} && -e $video_file;
-open(my $video_fh, '>', $video_file) || die "$video_file: cannot open file: $!\n";
+open(my $video_fh, '>>', $video_file) || die "$video_file: cannot open file: $!\n";
+# die "$video_file: cannot write to file: $!\n" if !defined syswrite($video_fh, "Stream URL,$url\n");
+# die "$video_file: cannot write to file: $!\n" if !defined syswrite($video_fh, "DateTime,Ad Marker\n");
 
 if ($opt{'svtplay'}) {
   my $data = eval { fetch_url($url) }; die "$url: cannot fetch page: $@" if $@;
@@ -167,15 +169,22 @@ while() {
 
 	my $sequence = 0;
 	my (%segments, $cryptkey_url);
+	my $datestring = localtime();
 	foreach my $line (@lines) {
 	  if ($line =~ /^#EXT-X-MEDIA-SEQUENCE:(\d+)$/) {
 		$sequence = $1;
 		print "First sequence number: $sequence\n" if $opt{'verbose'};
 	  } elsif ($line =~ /^#EXT-X-KEY:(.*)$/) {
 		my %attr = parse_m3u_attribs($url, $1);
-		die "$url: unsupported encryption method $attr{'METHOD'} in playlist\n" if exists $attr{'METHOD'} && $attr{'METHOD'} ne 'AES-128';
+		die "$url: unsupported encryption method $attr{'METHOD'} in playlist\n" if exists $attr{'METHOD'} && $attr{'METHOD'} ne 'AES-128' && $attr{'METHOD'} ne 'NONE';
 		$cryptkey_url = $attr{'URI'};
-		die "$url: missing encryption key URI in playlist\n" if !defined $cryptkey_url;
+		die "$url: missing encryption key URI in playlist\n" if !defined $cryptkey_url && $attr{'METHOD'} ne 'NONE';
+	  } elsif ($line =~ /^#EXT-X-CUE-OUT:(\d+\.?\d+)$/) {
+		print $line;
+		die "$video_file: cannot write to file: $!\n" if !defined syswrite($video_fh, "$datestring,$line\n");
+	  } elsif ($line =~ /^#EXT-X-CUE-IN/) {
+		print $line;
+		die "$video_file: cannot write to file: $!\n" if !defined syswrite($video_fh, "$datestring,$line\n");
 	  } elsif ($line !~ /^#EXT/) {
 		$segments{$sequence} = { 'url' => $line, 'cryptkey_url' => $cryptkey_url };
 		$sequence++;
@@ -235,10 +244,11 @@ while() {
 	  unlink $segment_file || warn "$segment_file: cannot remove file: $!\n";
 	  die $@ if $@;
 	}
-	close $video_fh;
 
 	sleep(4);
 }
+
+close $video_fh;
 
 sub parse_m3u_attribs {
   my ($url, $attr_str) = @_;
