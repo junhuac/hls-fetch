@@ -255,7 +255,7 @@ while() {
 		  $segment_file = $decrypt_file;
 		  die "$segment_file: openssl failed (status $?)\n" if $? != 0;
 		}
-		if ($adbreak && $segment_file =~ /((\.[^.\s]+)+)$/ ne '.m3u8') {
+		if ($adbreak && $segment_url !~ /(\.m3u8)$/) {
 			open ($segment_fh, '<', $segment_file) || die "$segment_file: cannot open file: $!\n";
 			for (;;) {
 			  my $data;
