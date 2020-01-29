@@ -192,21 +192,17 @@ while() {
 		if (!$adbreak) {
 			$adbreak = 1;
 			my $dt = DateTime->now;
-			$video_file = $opt{'output'} . '/' . $opt{'output'} . '-' . $dt->strftime( '%Y-%m-%d-%H-%M-%S' ) . '.ts';
-			die "$video_file: file exists, not overwriting without -f/--force\n" if !$opt{'force'} && -e $video_file;
-			open($video_fh, '>', $video_file) || die "$video_file: cannot open file: $!\n";
-			die "$admarker_file: cannot write to file: $!\n" if !defined syswrite($admarker_fh, "$datestring,$line,$video_file\n");
+			die "$admarker_file: cannot write to file: $!\n" if !defined syswrite($admarker_fh, "$datestring,$line\n");
 		} else {
-			die "$admarker_file: cannot write to file: $!\n" if !defined syswrite($admarker_fh, "$datestring,$line,\n");
+			die "$admarker_file: cannot write to file: $!\n" if !defined syswrite($admarker_fh, "$datestring,$line\n");
 		}
 
 	  } elsif ($line =~ /^#EXT-X-CUE-IN/) {
 		print $line;
-		die "$admarker_file: cannot write to file: $!\n" if !defined syswrite($admarker_fh, "$datestring,$line,\n");
+		die "$admarker_file: cannot write to file: $!\n" if !defined syswrite($admarker_fh, "$datestring,$line\n");
 
 		if ($adbreak) {
 			$adbreak = 0;
-			close $video_fh;
 		}
 	  } elsif ($line !~ /^#EXT/) {
 		$segments{$sequence} = { 'url' => $line, 'cryptkey_url' => $cryptkey_url };
